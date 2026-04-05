@@ -82,42 +82,47 @@ def with_sudo(cmd: list[str]) -> list[str]:
 # ── Interactive menu ──────────────────────────────────────────────────────────
 
 def show_menu() -> None:
-    print_banner()
+    while True:
+        print_banner()
 
-    table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
-    table.add_column("Key", style="bold cyan")
-    table.add_column("Command")
-    table.add_column("Description", style="dim")
-    table.add_row("1", "setup",   "Enable RPM Fusion + Flathub, install baseline packages")
-    table.add_row("2", "doctor",  "Quick system health check")
-    table.add_row("3", "backup",  "Create a timestamped backup archive")
-    table.add_row("4", "restore", "Restore a backup archive")
-    table.add_row("q", "quit",    "Exit")
-    console.print(table)
-    console.print()
+        table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+        table.add_column("Key", style="bold cyan")
+        table.add_column("Command")
+        table.add_column("Description", style="dim")
+        table.add_row("1", "setup",   "Enable RPM Fusion + Flathub, install baseline packages")
+        table.add_row("2", "doctor",  "Quick system health check")
+        table.add_row("3", "backup",  "Create a timestamped backup archive")
+        table.add_row("4", "restore", "Restore a backup archive")
+        table.add_row("q", "quit",    "Exit")
+        console.print(table)
+        console.print()
 
-    choice = Prompt.ask("  Select", choices=["1", "2", "3", "4", "q"], default="q")
-    console.print()
+        choice = Prompt.ask("  Select", choices=["1", "2", "3", "4", "q"], default="q")
+        console.print()
 
-    if choice == "1":
-        assume_yes = Confirm.ask("  Run without confirmation prompts?", default=False)
+        if choice == "1":
+            assume_yes = Confirm.ask("  Run without confirmation prompts?", default=False)
+            console.print()
+            cmd_setup(assume_yes=assume_yes)
+        elif choice == "2":
+            cmd_doctor()
+        elif choice == "3":
+            dest = Prompt.ask("  Backup destination", default=str(Path.home() / "Backups"))
+            inc  = Confirm.ask("  Include ~/.config?", default=False)
+            console.print()
+            cmd_backup(destination=dest, include_config=inc)
+        elif choice == "4":
+            archive = Prompt.ask("  Path to archive (.tar.gz)")
+            dest    = Prompt.ask("  Restore destination", default=str(Path.home() / "Restored"))
+            console.print()
+            cmd_restore(archive_path=archive, destination=dest)
+        else:
+            console.print("  [dim]Bye.[/]\n")
+            sys.exit(0)
+
         console.print()
-        sys.exit(cmd_setup(assume_yes=assume_yes))
-    elif choice == "2":
-        sys.exit(cmd_doctor())
-    elif choice == "3":
-        dest = Prompt.ask("  Backup destination", default=str(Path.home() / "Backups"))
-        inc  = Confirm.ask("  Include ~/.config?", default=False)
-        console.print()
-        sys.exit(cmd_backup(destination=dest, include_config=inc))
-    elif choice == "4":
-        archive = Prompt.ask("  Path to archive (.tar.gz)")
-        dest    = Prompt.ask("  Restore destination", default=str(Path.home() / "Restored"))
-        console.print()
-        sys.exit(cmd_restore(archive_path=archive, destination=dest))
-    else:
-        console.print("  [dim]Bye.[/]\n")
-        sys.exit(0)
+        input("  Press Enter to return to menu...")
+        console.clear()
 
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
@@ -212,14 +217,89 @@ def check_service(name: str, user: bool = False) -> tuple[bool, str]:
         return False, "systemctl not available"
 
 
+def check_failed_services() -> tuple[bool, str]:
+    try:
+        _, out, _ = run(["systemctl", "--failed", "--no-legend", "--no-pager"], check=False)
+        lines = [l.strip() for l in out.strip().splitlines() if l.strip()]
+        if not lines:
+            return True, "none"
+        return False, ", ".join(lines[:3]) + ("..." if len(lines) > 3 else "")
+    except FileNotFoundError:
+        return False, "systemctl not available"
+
+
 def check_disk() -> tuple[bool, str]:
     usage = shutil.disk_usage("/")
     pct = int((usage.used / usage.total) * 100)
+    total_gb = usage.total // (1024 ** 3)
+    free_gb  = (usage.total - usage.used) // (1024 ** 3)
+    detail = f"{pct}% used — {free_gb} GB free of {total_gb} GB"
     if pct >= 90:
-        return False, f"{pct}% used — almost full"
+        return False, f"{detail} — almost full"
     if pct >= 80:
-        return True, f"{pct}% used — getting full"
-    return True, f"{pct}% used"
+        return True, f"{detail} — getting full"
+    return True, detail
+
+
+def check_ram() -> tuple[bool, str]:
+    try:
+        mem = Path("/proc/meminfo").read_text()
+        total = free = available = 0
+        for line in mem.splitlines():
+            if line.startswith("MemTotal:"):
+                total = int(line.split()[1])
+            elif line.startswith("MemAvailable:"):
+                available = int(line.split()[1])
+        used = total - available
+        pct = int((used / total) * 100) if total else 0
+        total_gb   = round(total / (1024 ** 2), 1)
+        used_gb    = round(used  / (1024 ** 2), 1)
+        detail = f"{used_gb} GB used of {total_gb} GB ({pct}%)"
+        return pct < 90, detail
+    except Exception:
+        return False, "could not read"
+
+
+def check_updates() -> tuple[bool, str]:
+    try:
+        code, out, _ = run([pkg_manager(), "check-update", "--quiet"], check=False)
+        if code == 0:
+            return True, "up to date"
+        lines = [l for l in out.strip().splitlines() if l.strip() and not l.startswith("Last")]
+        count = len(lines)
+        return False, f"{count} update(s) available"
+    except FileNotFoundError:
+        return False, "dnf not available"
+
+
+def check_flatpak_count() -> tuple[bool, str]:
+    if not command_exists("flatpak"):
+        return True, "flatpak not installed"
+    try:
+        _, out, _ = run(["flatpak", "list", "--app", "--columns=name"], check=False)
+        count = len([l for l in out.strip().splitlines() if l.strip()])
+        return True, f"{count} app(s) installed"
+    except Exception:
+        return False, "could not read"
+
+
+def check_kernel() -> tuple[bool, str]:
+    try:
+        _, out, _ = run(["uname", "-r"])
+        return True, out.strip()
+    except Exception:
+        return False, "could not read"
+
+
+def check_uptime() -> tuple[bool, str]:
+    try:
+        with open("/proc/uptime") as f:
+            seconds = float(f.read().split()[0])
+        h = int(seconds // 3600)
+        m = int((seconds % 3600) // 60)
+        return True, f"{h}h {m}m"
+    except Exception:
+        return False, "could not read"
 
 
 def cmd_doctor() -> int:
@@ -227,12 +307,16 @@ def cmd_doctor() -> int:
     console.print("  [bold]Running diagnostics...[/]\n")
 
     checks = [
-        ("dnf",            check_binary(pkg_manager())),
-        ("flatpak",        check_binary("flatpak")),
-        ("NetworkManager", check_service("NetworkManager")),
-        ("pipewire",       check_service("pipewire", user=True)),
-        ("wireplumber",    check_service("wireplumber", user=True)),
-        ("disk /",         check_disk()),
+        ("kernel",          check_kernel()),
+        ("uptime",          check_uptime()),
+        ("RAM",             check_ram()),
+        ("disk /",          check_disk()),
+        ("dnf updates",     check_updates()),
+        ("failed services", check_failed_services()),
+        ("NetworkManager",  check_service("NetworkManager")),
+        ("pipewire",        check_service("pipewire", user=True)),
+        ("wireplumber",     check_service("wireplumber", user=True)),
+        ("flatpak apps",    check_flatpak_count()),
     ]
 
     table = Table(box=box.SIMPLE, show_header=True, header_style="dim")
@@ -341,8 +425,7 @@ def cmd_restore(archive_path: str, destination: str) -> int:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> int:
-    parser = argparse.ArgumentParser(prog="carekit", description="Fedora workstation toolkit",
-                                     add_help=True)
+    parser = argparse.ArgumentParser(prog="carekit", description="Fedora workstation toolkit")
     sub = parser.add_subparsers(dest="command")
 
     s = sub.add_parser("setup", help="Enable RPM Fusion + Flathub, install baseline packages")
@@ -360,7 +443,6 @@ def main() -> int:
 
     args = parser.parse_args()
 
-    # No subcommand → interactive menu
     if not args.command:
         show_menu()
         return 0
