@@ -12,7 +12,7 @@ carekit
 
 **setup** — enables RPM Fusion (free + nonfree) and Flathub, then installs a base set of packages: git, curl, wget, vim, htop, tmux. Asks before doing anything unless you pass `--yes`.
 
-**doctor** — runs a quick local health check. Looks at dnf, flatpak, NetworkManager, PipeWire, wireplumber and disk usage. No network calls, nothing gets changed.
+**doctor** — runs a quick local health check. Shows kernel version, uptime, RAM and disk usage, pending dnf updates, failed systemd services, NetworkManager, PipeWire, wireplumber and installed Flatpak apps. No network calls, nothing gets changed.
 
 **backup** — packs up Documents, Pictures and Desktop into a timestamped `.tar.gz`. Add `--include-config` to also grab `~/.config`.
 
