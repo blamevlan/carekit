@@ -29,7 +29,7 @@ DEFAULT_BACKUP_ITEMS = ["~/Documents", "~/Pictures", "~/Desktop"]
 def print_banner() -> None:
     console.print()
     console.print(Panel(
-        "[bold]carekit[/]  [dim]github.com/blamevlan/carekit[/]\n"
+        "[bold]carekit[/]  [dim]github.com/blamevlan[/]\n"
         "[dim]Fedora workstation toolkit[/]",
         border_style="blue",
         padding=(0, 2),
@@ -40,7 +40,7 @@ def print_banner() -> None:
 def print_header(command: str) -> None:
     console.print()
     console.print(Panel(
-        f"[bold]carekit[/]  [dim]github.com/blamevlan/carekit[/]\n"
+        f"[bold]carekit[/]  [dim]github.com/blamevlan[/]\n"
         f"[dim]{command}[/]",
         border_style="blue",
         padding=(0, 2),
