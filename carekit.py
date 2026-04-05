@@ -15,6 +15,7 @@ from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
+from rich.prompt import Prompt, Confirm
 from rich.table import Table
 from rich import box
 
@@ -25,11 +26,22 @@ DEFAULT_BACKUP_ITEMS = ["~/Documents", "~/Pictures", "~/Desktop"]
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+def print_banner() -> None:
+    console.print()
+    console.print(Panel(
+        "[bold]carekit[/]  [dim]github.com/blamevlan/carekit[/]\n"
+        "[dim]Fedora workstation toolkit[/]",
+        border_style="blue",
+        padding=(0, 2),
+    ))
+    console.print()
+
+
 def print_header(command: str) -> None:
     console.print()
     console.print(Panel(
         f"[bold]carekit[/]  [dim]github.com/blamevlan/carekit[/]\n"
-        f"Command: [bold cyan]{command}[/]",
+        f"[dim]{command}[/]",
         border_style="blue",
         padding=(0, 2),
     ))
@@ -67,10 +79,51 @@ def with_sudo(cmd: list[str]) -> list[str]:
     return cmd
 
 
+# ── Interactive menu ──────────────────────────────────────────────────────────
+
+def show_menu() -> None:
+    print_banner()
+
+    table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+    table.add_column("Key", style="bold cyan")
+    table.add_column("Command")
+    table.add_column("Description", style="dim")
+    table.add_row("1", "setup",   "Enable RPM Fusion + Flathub, install baseline packages")
+    table.add_row("2", "doctor",  "Quick system health check")
+    table.add_row("3", "backup",  "Create a timestamped backup archive")
+    table.add_row("4", "restore", "Restore a backup archive")
+    table.add_row("q", "quit",    "Exit")
+    console.print(table)
+    console.print()
+
+    choice = Prompt.ask("  Select", choices=["1", "2", "3", "4", "q"], default="q")
+    console.print()
+
+    if choice == "1":
+        assume_yes = Confirm.ask("  Run without confirmation prompts?", default=False)
+        console.print()
+        sys.exit(cmd_setup(assume_yes=assume_yes))
+    elif choice == "2":
+        sys.exit(cmd_doctor())
+    elif choice == "3":
+        dest = Prompt.ask("  Backup destination", default=str(Path.home() / "Backups"))
+        inc  = Confirm.ask("  Include ~/.config?", default=False)
+        console.print()
+        sys.exit(cmd_backup(destination=dest, include_config=inc))
+    elif choice == "4":
+        archive = Prompt.ask("  Path to archive (.tar.gz)")
+        dest    = Prompt.ask("  Restore destination", default=str(Path.home() / "Restored"))
+        console.print()
+        sys.exit(cmd_restore(archive_path=archive, destination=dest))
+    else:
+        console.print("  [dim]Bye.[/]\n")
+        sys.exit(0)
+
+
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
 def cmd_setup(assume_yes: bool) -> int:
-    print_header("setup")
+    print_header("setup — RPM Fusion · Flathub · baseline packages")
 
     if not is_fedora():
         console.print(Panel(
@@ -85,16 +138,15 @@ def cmd_setup(assume_yes: bool) -> int:
     table.add_column("Action")
     table.add_row("1", "Enable RPM Fusion free + nonfree")
     table.add_row("2", "Add Flathub remote")
-    table.add_row("3", "Install baseline packages: git, curl, wget, vim, htop, tmux")
+    table.add_row("3", "Install: git  curl  wget  vim  htop  tmux")
     console.print(table)
     console.print()
 
     if not assume_yes:
-        answer = console.input("  Run setup now? [y/N]: ").strip().lower()
-        console.print()
-        if answer not in {"y", "yes", "j", "ja"}:
+        if not Confirm.ask("  Run setup now?", default=False):
             console.print("  [dim]Cancelled.[/]\n")
             return 0
+        console.print()
 
     failures: list[str] = []
     dnf = pkg_manager()
@@ -171,7 +223,7 @@ def check_disk() -> tuple[bool, str]:
 
 
 def cmd_doctor() -> int:
-    print_header("doctor")
+    print_header("doctor — system health check")
     console.print("  [bold]Running diagnostics...[/]\n")
 
     checks = [
@@ -190,10 +242,8 @@ def cmd_doctor() -> int:
 
     failures = 0
     for name, (ok_flag, detail) in checks:
-        if ok_flag:
-            status = "[green]✓  OK[/]"
-        else:
-            status = "[red]✗  FAIL[/]"
+        status = "[green]✓  OK[/]" if ok_flag else "[red]✗  FAIL[/]"
+        if not ok_flag:
             failures += 1
         table.add_row(name, status, detail)
 
@@ -291,8 +341,9 @@ def cmd_restore(archive_path: str, destination: str) -> int:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> int:
-    parser = argparse.ArgumentParser(prog="carekit", description="Fedora workstation toolkit")
-    sub = parser.add_subparsers(dest="command", required=True)
+    parser = argparse.ArgumentParser(prog="carekit", description="Fedora workstation toolkit",
+                                     add_help=True)
+    sub = parser.add_subparsers(dest="command")
 
     s = sub.add_parser("setup", help="Enable RPM Fusion + Flathub, install baseline packages")
     s.add_argument("-y", "--yes", action="store_true", help="skip confirmation prompt")
@@ -309,6 +360,11 @@ def main() -> int:
 
     args = parser.parse_args()
 
+    # No subcommand → interactive menu
+    if not args.command:
+        show_menu()
+        return 0
+
     if args.command == "setup":
         return cmd_setup(assume_yes=args.yes)
     if args.command == "doctor":
@@ -318,8 +374,7 @@ def main() -> int:
     if args.command == "restore":
         return cmd_restore(archive_path=args.archive, destination=args.dest)
 
-    parser.print_help()
-    return 1
+    return 0
 
 
 if __name__ == "__main__":

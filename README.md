@@ -1,22 +1,22 @@
 # carekit
 
-A small toolkit for Fedora workstations. It handles the things you do once when setting up a new machine, and occasionally afterwards — enabling repos, running a quick health check, taking a backup.
+I built this because I kept repeating the same steps every time I set up a fresh Fedora machine — enabling RPM Fusion, adding Flathub, installing the same handful of packages. carekit wraps all of that into one tool, plus a couple of extras I wanted anyway (quick health check, local backups).
+
+Just run `carekit` and pick what you want from the menu.
 
 ```
-carekit setup
-carekit doctor
-carekit backup --dest ~/Backups
+carekit
 ```
 
-## Commands
+## What it does
 
-**`setup`** — enables RPM Fusion and Flathub, then installs a baseline set of packages (`git`, `curl`, `wget`, `vim`, `htop`, `tmux`). Asks for confirmation unless you pass `--yes`.
+**setup** — enables RPM Fusion (free + nonfree) and Flathub, then installs a base set of packages: git, curl, wget, vim, htop, tmux. Asks before doing anything unless you pass `--yes`.
 
-**`doctor`** — runs a quick local health check: package manager, Flatpak, NetworkManager, PipeWire, disk usage. No network calls, no changes.
+**doctor** — runs a quick local health check. Looks at dnf, flatpak, NetworkManager, PipeWire, wireplumber and disk usage. No network calls, nothing gets changed.
 
-**`backup`** — creates a timestamped `.tar.gz` from `~/Documents`, `~/Pictures` and `~/Desktop`. Add `--include-config` to also include `~/.config`.
+**backup** — packs up Documents, Pictures and Desktop into a timestamped `.tar.gz`. Add `--include-config` to also grab `~/.config`.
 
-**`restore`** — extracts a carekit backup archive into a directory of your choice.
+**restore** — unpacks a carekit backup into whatever directory you point it at.
 
 ## Install
 
@@ -24,21 +24,21 @@ carekit backup --dest ~/Backups
 curl -fsSL https://raw.githubusercontent.com/blamevlan/carekit/main/install.sh | bash
 ```
 
-Requires Python 3. Installs to `/usr/local/bin/carekit` by default (needs sudo).
+Needs Python 3 and [rich](https://github.com/Textualize/rich) — the install script handles rich automatically.
 
 ## Usage
 
 ```bash
-carekit --help
-carekit setup
-carekit setup --yes
-carekit doctor
+carekit                    # interactive menu
+carekit doctor             # run directly
+carekit setup --yes        # skip the confirmation
+carekit backup --dest ~/Backups
 carekit backup --dest ~/Backups --include-config
 carekit restore --archive ~/Backups/carekit-backup-20260405-120000Z.tar.gz --dest ~/Restored
 ```
 
 ## Notes
 
-- Fedora is the primary target. Most things will work on RHEL and similar, but it's not tested there.
-- `setup` needs root for dnf and flatpak remote-add.
-- `backup` and `restore` are entirely local — nothing leaves your machine.
+- Built for Fedora. Should work on RHEL and similar but I only test on Fedora.
+- `setup` needs sudo for dnf and flatpak.
+- `backup` and `restore` are purely local, nothing gets uploaded anywhere.
