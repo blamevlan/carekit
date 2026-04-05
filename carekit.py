@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Fedora Care Kit: setup, diagnostics, backup and restore helpers."""
+# carekit — Fedora workstation toolkit
+# github.com/blamevlan/carekit
 
 from __future__ import annotations
 
@@ -11,321 +12,311 @@ import subprocess
 import sys
 import tarfile
 from pathlib import Path
-from typing import Iterable
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich import box
+
+console = Console()
+
+DEFAULT_BACKUP_ITEMS = ["~/Documents", "~/Pictures", "~/Desktop"]
 
 
-APP_NAME = "Fedora Care Kit"
-DEFAULT_BACKUP_ITEMS = [
-    "~/Documents",
-    "~/Pictures",
-    "~/Desktop",
-]
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def print_header(command: str) -> None:
+    console.print()
+    console.print(Panel(
+        f"[bold]carekit[/]  [dim]github.com/blamevlan/carekit[/]\n"
+        f"Command: [bold cyan]{command}[/]",
+        border_style="blue",
+        padding=(0, 2),
+    ))
+    console.print()
 
 
-class Colors:
-    GREEN = "\033[92m"
-    YELLOW = "\033[93m"
-    RED = "\033[91m"
-    BLUE = "\033[94m"
-    RESET = "\033[0m"
-
-
-def info(msg: str) -> None:
-    print(f"{Colors.BLUE}[*]{Colors.RESET} {msg}")
-
-
-def ok(msg: str) -> None:
-    print(f"{Colors.GREEN}[OK]{Colors.RESET} {msg}")
-
-
-def warn(msg: str) -> None:
-    print(f"{Colors.YELLOW}[WARN]{Colors.RESET} {msg}")
-
-
-def err(msg: str) -> None:
-    print(f"{Colors.RED}[ERR]{Colors.RESET} {msg}")
-
-
-def run_command(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, check=check, text=True, capture_output=True)
+def run(cmd: list[str], check: bool = True) -> tuple[int, str, str]:
+    result = subprocess.run(cmd, text=True, capture_output=True)
+    if check and result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
+    return result.returncode, result.stdout, result.stderr
 
 
 def command_exists(name: str) -> bool:
     return shutil.which(name) is not None
 
 
-def pkg_manager_cmd() -> str:
-    if command_exists("dnf"):
-        return "dnf"
-    if command_exists("dnf5"):
-        return "dnf5"
-    return "dnf"
+def pkg_manager() -> str:
+    return "dnf5" if command_exists("dnf5") else "dnf"
 
 
 def is_fedora() -> bool:
-    os_release = Path("/etc/os-release")
-    if not os_release.exists():
+    p = Path("/etc/os-release")
+    if not p.exists():
         return False
-    content = os_release.read_text(encoding="utf-8", errors="ignore").lower()
+    content = p.read_text(errors="ignore").lower()
     return "id=fedora" in content or "id_like=fedora" in content
 
 
-def require_fedora() -> None:
-    if not is_fedora():
-        warn("This tool is Fedora-first. Some actions may not work on your distro.")
-
-
-def has_admin_rights() -> bool:
-    return os.geteuid() == 0
-
-
-def with_privileges(base_cmd: list[str]) -> list[str]:
-    if has_admin_rights():
-        return base_cmd
+def with_sudo(cmd: list[str]) -> list[str]:
+    if os.geteuid() == 0:
+        return cmd
     if command_exists("sudo"):
-        return ["sudo", *base_cmd]
-    return base_cmd
+        return ["sudo", *cmd]
+    return cmd
 
 
-def print_setup_plan() -> None:
-    info("Setup plan:")
-    print("  1) Enable RPM Fusion free/nonfree")
-    print("  2) Add Flathub remote")
-    print("  3) Install baseline packages")
+# ── Setup ─────────────────────────────────────────────────────────────────────
 
+def cmd_setup(assume_yes: bool) -> int:
+    print_header("setup")
 
-def run_setup(assume_yes: bool) -> int:
-    require_fedora()
-    print_setup_plan()
+    if not is_fedora():
+        console.print(Panel(
+            "[yellow]This system does not appear to be Fedora.[/]\n"
+            "carekit setup is designed for Fedora. Proceed at your own risk.",
+            border_style="yellow",
+        ))
+        console.print()
 
-    if not has_admin_rights():
-        warn("You are not root. Some steps require sudo.")
+    table = Table(box=box.SIMPLE, show_header=False, padding=(0, 2))
+    table.add_column("Step", style="dim")
+    table.add_column("Action")
+    table.add_row("1", "Enable RPM Fusion free + nonfree")
+    table.add_row("2", "Add Flathub remote")
+    table.add_row("3", "Install baseline packages: git, curl, wget, vim, htop, tmux")
+    console.print(table)
+    console.print()
 
     if not assume_yes:
-        answer = input("Run setup now? [y/N]: ").strip().lower()
+        answer = console.input("  Run setup now? [y/N]: ").strip().lower()
+        console.print()
         if answer not in {"y", "yes", "j", "ja"}:
-            info("Cancelled.")
+            console.print("  [dim]Cancelled.[/]\n")
             return 0
 
     failures: list[str] = []
+    dnf = pkg_manager()
 
-    dnf_cmd = pkg_manager_cmd()
-    rpm_urls = [
-        "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm",
-        "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm",
-    ]
-
-    info("Enabling RPM Fusion ...")
+    console.print("  [bold]Enabling RPM Fusion...[/]")
     try:
         subprocess.run(
-            ["bash", "-lc", " ".join(with_privileges([dnf_cmd, "install", "-y", *rpm_urls]))],
-            check=True,
-            text=True,
-            capture_output=True,
+            ["bash", "-lc", " ".join(with_sudo([
+                dnf, "install", "-y",
+                "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm",
+                "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm",
+            ]))],
+            check=True, text=True, capture_output=True,
         )
-        ok("RPM Fusion enabled.")
+        console.print("  [green]✓[/] RPM Fusion enabled.\n")
     except subprocess.CalledProcessError as ex:
         failures.append("RPM Fusion")
-        err(f"RPM Fusion failed: {ex.stderr.strip()[:240]}")
+        console.print(f"  [red]✗[/] RPM Fusion failed: {ex.stderr.strip()[:200]}\n")
 
-    info("Enabling Flathub ...")
+    console.print("  [bold]Enabling Flathub...[/]")
     try:
-        run_command(
-            [
-                "flatpak",
-                "remote-add",
-                "--if-not-exists",
-                "flathub",
-                "https://flathub.org/repo/flathub.flatpakrepo",
-            ]
-        )
-        ok("Flathub enabled.")
+        run(["flatpak", "remote-add", "--if-not-exists", "flathub",
+             "https://flathub.org/repo/flathub.flatpakrepo"])
+        console.print("  [green]✓[/] Flathub enabled.\n")
     except (subprocess.CalledProcessError, FileNotFoundError) as ex:
         failures.append("Flathub")
-        err(f"Flathub failed: {str(ex)[:240]}")
+        console.print(f"  [red]✗[/] Flathub failed: {str(ex)[:200]}\n")
 
-    base_packages = ["git", "curl", "wget", "vim", "htop", "tmux"]
-    info(f"Installing baseline packages: {', '.join(base_packages)} ...")
+    pkgs = ["git", "curl", "wget", "vim", "htop", "tmux"]
+    console.print("  [bold]Installing baseline packages...[/]")
     try:
-        run_command(with_privileges([dnf_cmd, "install", "-y", *base_packages]))
-        ok("Baseline packages installed.")
+        run(with_sudo([dnf, "install", "-y", *pkgs]))
+        console.print("  [green]✓[/] Packages installed.\n")
     except (subprocess.CalledProcessError, FileNotFoundError) as ex:
-        failures.append("baseline packages")
-        err(f"Package install failed: {str(ex)[:240]}")
+        failures.append("packages")
+        console.print(f"  [red]✗[/] Package install failed: {str(ex)[:200]}\n")
 
     if failures:
-        warn(f"Setup completed with issues in: {', '.join(failures)}")
-        return 1
+        console.print(Panel(
+            f"[yellow]Setup completed with issues:[/] {', '.join(failures)}",
+            border_style="yellow",
+        ))
+    else:
+        console.print(Panel("[green]Setup completed successfully.[/]", border_style="green"))
+    console.print()
+    return 1 if failures else 0
 
-    ok("Setup completed successfully.")
-    return 0
 
+# ── Doctor ────────────────────────────────────────────────────────────────────
 
 def check_binary(name: str) -> tuple[bool, str]:
     path = shutil.which(name)
-    if path:
-        return True, f"{name} found at {path}"
-    return False, f"{name} not found"
+    return (True, str(path)) if path else (False, "not found")
 
 
-def check_service(name: str) -> tuple[bool, str]:
+def check_service(name: str, user: bool = False) -> tuple[bool, str]:
+    cmd = ["systemctl", "--user", "is-active", name] if user else ["systemctl", "is-active", name]
     try:
-        result = run_command(["systemctl", "is-active", name], check=False)
-        active = result.stdout.strip() == "active"
-        if active:
-            return True, f"Service {name} is active"
-        return False, f"Service {name} is {result.stdout.strip() or 'inactive'}"
-    except FileNotFoundError:
-        return False, "systemctl not available"
-
-
-def check_user_service(name: str) -> tuple[bool, str]:
-    try:
-        result = run_command(["systemctl", "--user", "is-active", name], check=False)
-        active = result.stdout.strip() == "active"
-        if active:
-            return True, f"User service {name} is active"
-        return False, f"User service {name} is {result.stdout.strip() or 'inactive'}"
+        _, out, _ = run(cmd, check=False)
+        state = out.strip()
+        return state == "active", state or "inactive"
     except FileNotFoundError:
         return False, "systemctl not available"
 
 
 def check_disk() -> tuple[bool, str]:
     usage = shutil.disk_usage("/")
-    percent_used = int((usage.used / usage.total) * 100)
-    if percent_used >= 90:
-        return False, f"Root filesystem almost full ({percent_used}% used)"
-    if percent_used >= 80:
-        return True, f"Root filesystem getting full ({percent_used}% used)"
-    return True, f"Root filesystem OK ({percent_used}% used)"
+    pct = int((usage.used / usage.total) * 100)
+    if pct >= 90:
+        return False, f"{pct}% used — almost full"
+    if pct >= 80:
+        return True, f"{pct}% used — getting full"
+    return True, f"{pct}% used"
 
 
-def run_doctor() -> int:
-    require_fedora()
-    info("Running diagnostics ...")
+def cmd_doctor() -> int:
+    print_header("doctor")
+    console.print("  [bold]Running diagnostics...[/]\n")
 
-    checks: list[tuple[str, tuple[bool, str]]] = [
-        ("dnf", check_binary(pkg_manager_cmd())),
-        ("flatpak", check_binary("flatpak")),
+    checks = [
+        ("dnf",            check_binary(pkg_manager())),
+        ("flatpak",        check_binary("flatpak")),
         ("NetworkManager", check_service("NetworkManager")),
-        ("pipewire", check_user_service("pipewire")),
-        ("wireplumber", check_user_service("wireplumber")),
-        ("disk", check_disk()),
+        ("pipewire",       check_service("pipewire", user=True)),
+        ("wireplumber",    check_service("wireplumber", user=True)),
+        ("disk /",         check_disk()),
     ]
 
+    table = Table(box=box.SIMPLE, show_header=True, header_style="dim")
+    table.add_column("Check")
+    table.add_column("Status")
+    table.add_column("Detail", style="dim")
+
     failures = 0
-    for name, (status, message) in checks:
-        _ = name
-        if status:
-            ok(message)
+    for name, (ok_flag, detail) in checks:
+        if ok_flag:
+            status = "[green]✓  OK[/]"
         else:
+            status = "[red]✗  FAIL[/]"
             failures += 1
-            err(message)
+        table.add_row(name, status, detail)
+
+    console.print(table)
+    console.print()
 
     if failures:
-        warn(f"Diagnostics completed: {failures} problem(s) found.")
-        return 1
-
-    ok("Diagnostics completed: no critical issues found.")
-    return 0
-
-
-def resolve_items(items: Iterable[str]) -> list[Path]:
-    resolved = []
-    for item in items:
-        p = Path(os.path.expanduser(item)).resolve()
-        if p.exists():
-            resolved.append(p)
-        else:
-            warn(f"Path not found, skipped: {p}")
-    return resolved
+        console.print(Panel(
+            f"[yellow]{failures} problem(s) found.[/] Review the table above.",
+            border_style="yellow",
+        ))
+    else:
+        console.print(Panel("[green]All checks passed.[/]", border_style="green"))
+    console.print()
+    return 1 if failures else 0
 
 
-def run_backup(destination: str, include_config: bool) -> int:
-    target_dir = Path(destination).expanduser().resolve()
-    target_dir.mkdir(parents=True, exist_ok=True)
+# ── Backup ────────────────────────────────────────────────────────────────────
+
+def cmd_backup(destination: str, include_config: bool) -> int:
+    print_header("backup")
 
     items = DEFAULT_BACKUP_ITEMS.copy()
     if include_config:
         items.append("~/.config")
 
-    sources = resolve_items(items)
+    sources = []
+    for item in items:
+        p = Path(os.path.expanduser(item)).resolve()
+        if p.exists():
+            sources.append(p)
+        else:
+            console.print(f"  [yellow]⚠[/]  Skipped (not found): {p}")
+
     if not sources:
-        err("No valid backup source paths found.")
+        console.print(Panel("[red]No valid source paths found.[/]", border_style="red"))
+        console.print()
         return 1
 
+    target_dir = Path(destination).expanduser().resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
     timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%SZ")
     backup_file = target_dir / f"carekit-backup-{timestamp}.tar.gz"
 
-    info(f"Creating backup: {backup_file}")
+    console.print(f"  [bold]Creating archive:[/] [dim]{backup_file}[/]\n")
     with tarfile.open(backup_file, mode="w:gz") as tar:
         for source in sources:
-            arcname = source.name
-            tar.add(source, arcname=arcname)
-            ok(f"Added: {source}")
+            tar.add(source, arcname=source.name)
+            console.print(f"  [green]✓[/] {source}")
 
-    ok(f"Backup created: {backup_file}")
+    console.print()
+    console.print(Panel(
+        f"[green]Backup created:[/]\n[dim]{backup_file}[/]",
+        border_style="green",
+    ))
+    console.print()
     return 0
 
 
-def run_restore(archive_path: str, destination: str) -> int:
+# ── Restore ───────────────────────────────────────────────────────────────────
+
+def cmd_restore(archive_path: str, destination: str) -> int:
+    print_header("restore")
+
     archive = Path(archive_path).expanduser().resolve()
     if not archive.exists():
-        err(f"Archive not found: {archive}")
+        console.print(Panel(f"[red]Archive not found:[/] {archive}", border_style="red"))
+        console.print()
         return 1
 
     target = Path(destination).expanduser().resolve()
     target.mkdir(parents=True, exist_ok=True)
 
-    def _is_safe_member(member_name: str) -> bool:
-        member_path = (target / member_name).resolve()
-        return str(member_path).startswith(str(target))
+    console.print(f"  [bold]Extracting to:[/] [dim]{target}[/]\n")
 
-    info(f"Extracting {archive} to {target}")
     with tarfile.open(archive, mode="r:gz") as tar:
-        members = tar.getmembers()
-        unsafe = [m.name for m in members if not _is_safe_member(m.name)]
+        unsafe = [
+            m.name for m in tar.getmembers()
+            if not str((target / m.name).resolve()).startswith(str(target))
+        ]
         if unsafe:
-            err(f"Unsafe archive paths detected, restore aborted: {unsafe[:3]}")
+            console.print(Panel(
+                f"[red]Unsafe paths in archive — restore aborted.[/]\n[dim]{unsafe[:3]}[/]",
+                border_style="red",
+            ))
+            console.print()
             return 1
         tar.extractall(path=target)
 
-    ok("Restore completed.")
+    console.print(Panel("[green]Restore completed.[/]", border_style="green"))
+    console.print()
     return 0
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="carekit", description=APP_NAME)
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="carekit", description="Fedora workstation toolkit")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    setup = sub.add_parser("setup", help="Run baseline Fedora setup")
-    setup.add_argument("-y", "--yes", action="store_true", help="run without prompt")
+    s = sub.add_parser("setup", help="Enable RPM Fusion + Flathub, install baseline packages")
+    s.add_argument("-y", "--yes", action="store_true", help="skip confirmation prompt")
 
-    sub.add_parser("doctor", help="Run basic diagnostics")
+    sub.add_parser("doctor", help="Run a quick system health check")
 
-    backup = sub.add_parser("backup", help="Create a backup archive")
-    backup.add_argument("--dest", required=True, help="backup destination directory")
-    backup.add_argument("--include-config", action="store_true", help="include ~/.config")
+    b = sub.add_parser("backup", help="Create a backup archive")
+    b.add_argument("--dest", required=True, help="destination directory")
+    b.add_argument("--include-config", action="store_true", help="also include ~/.config")
 
-    restore = sub.add_parser("restore", help="Restore a backup archive")
-    restore.add_argument("--archive", required=True, help="path to .tar.gz backup")
-    restore.add_argument("--dest", required=True, help="restore destination directory")
+    r = sub.add_parser("restore", help="Restore a backup archive")
+    r.add_argument("--archive", required=True, help="path to .tar.gz backup file")
+    r.add_argument("--dest", required=True, help="restore destination directory")
 
-    return parser
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args()
 
     if args.command == "setup":
-        return run_setup(assume_yes=args.yes)
+        return cmd_setup(assume_yes=args.yes)
     if args.command == "doctor":
-        return run_doctor()
+        return cmd_doctor()
     if args.command == "backup":
-        return run_backup(destination=args.dest, include_config=args.include_config)
+        return cmd_backup(destination=args.dest, include_config=args.include_config)
     if args.command == "restore":
-        return run_restore(archive_path=args.archive, destination=args.dest)
+        return cmd_restore(archive_path=args.archive, destination=args.dest)
 
     parser.print_help()
     return 1
